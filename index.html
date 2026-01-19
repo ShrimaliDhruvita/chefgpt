@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChefGPT</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div>
+        <h1>🍳 ChefGPT</h1>
+        <p>Customized, nutrition-aware recipes from text or image. | कस्टम रेसिपी (टेक्स्ट/इमेज)</p>
+      </div>
+      <div id="health" class="badge badge-warn">Checking...</div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h2>💬 From Prompt | प्रॉम्प्ट से</h2>
+        <form id="prompt-form">
+          <label>Recipe Request | रेसिपी रिक्वेस्ट</label>
+          <input id="recipe-prompt" type="text" placeholder="gajar ka halwa" required />
+          <div class="row">
+            <div>
+              <label>Servings | सर्विंग</label>
+              <input id="prompt-servings" type="number" value="2" min="1" />
+            </div>
+            <div>
+              <label>Language | भाषा</label>
+              <select id="prompt-language">
+                <option value="english" selected>English</option>
+                <option value="hindi">Hindi | हिन्दी</option>
+                <option value="marathi">Marathi | मराठी</option>
+                <option value="gujarati">Gujarati | ગુજરાતી</option>
+              </select>
+            </div>
+          </div>
+          <button id="btn-prompt" type="submit">🍽️ Generate Recipe | रेसिपी बनाएं</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>🥕 From Ingredients | सामग्री से</h2>
+        <form id="text-form">
+          <label>Ingredients (comma-separated) | सामग्री (कॉमा से अलग)</label>
+          <input id="ingredients" type="text" placeholder="aloo, matar, pyaz" required />
+          <div class="row">
+            <div>
+              <label>Servings | सर्विंग</label>
+              <input id="servings" type="number" value="2" min="1" />
+            </div>
+            <div>
+              <label>Cuisine hint (optional) | व्यंजन संकेत</label>
+              <input id="cuisine" type="text" placeholder="Indian" />
+            </div>
+            <div>
+              <label>Language | भाषा</label>
+              <select id="language">
+                <option value="english" selected>English</option>
+                <option value="hindi">Hindi | हिन्दी</option>
+                <option value="marathi">Marathi | मराठी</option>
+                <option value="gujarati">Gujarati | ગુજરાતી</option>
+      
+              </select>
+            </div>
+          </div>
+          <button id="btn-text" type="submit">🍽️ Generate Recipe | रेसिपी बनाएं</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>📸 From Image | तस्वीर से</h2>
+        <form id="image-form">
+          <label>Choose image | तस्वीर चुनें</label>
+          <input id="image" type="file" accept="image/*" required />
+          <div class="row">
+            <div>
+              <label>Servings | सर्विंग</label>
+              <input id="img-servings" type="number" value="2" min="1" />
+            </div>
+            <div>
+              <label>Cuisine hint (optional) | व्यंजन संकेत</label>
+              <input id="img-cuisine" type="text" placeholder="Indian" />
+            </div>
+            <div>
+              <label>Language | भाषा</label>
+              <select id="img-language">
+                <option value="english" selected>English</option>
+                <option value="hindi">Hindi | हिन्दी</option>
+                <option value="marathi">Marathi | मराठी</option>
+                <option value="gujarati">Gujarati | ગુજરાતી</option>
+              </select>
+            </div>
+          </div>
+          <button id="btn-image" type="submit">🍽️ Generate Recipe | रेसिपी बनाएं</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="messages" class="messages" role="status" aria-live="polite"></div>
+    <div id="output" class="output"></div>
+  </div>
+
+    <!-- Floating My Recipes button -->
+    <a id="floatingMyRecipes" href="/saved-recipes" title="My Recipes" class="floating-recipes-btn">📋 My Recipes</a>
+
+  <script>
+    const output = document.getElementById('output');
+    const health = document.getElementById('health');
+    const messages = document.getElementById('messages');
+    
+    // Store last request data for regeneration
+    let lastRequest = null;
+    // Mirror to window for easier access from render functions
+    window.lastRequest = lastRequest;
+
+    function setBadge(ok) {
+      health.textContent = ok ? 'Healthy' : 'Unavailable';
+      health.className = ok ? 'badge badge-ok' : 'badge badge-err';
+    }
+
+    async function checkHealth() {
+      try {
+        const res = await fetch('/health');
+        setBadge(res.ok);
+      } catch {
+        setBadge(false);
+      }
+    }
+    checkHealth();
+
+    function showMessage(text, type = 'info') {
+      messages.innerHTML = `<div class="msg ${type}">${text}</div>`;
+    }
+    function clearMessage() { messages.innerHTML = ''; }
+
+    function showLoading() {
+      output.innerHTML = `
+        <div class="loading-container">
+          <div class="loading-text">🍳 Cooking up your recipe... | आपकी रेसिपी तैयार हो रही है...</div>
+        </div>
+      `;
+    }
+
+    function setLoading(button, isLoading) {
+      if (!button) return;
+      button.disabled = !!isLoading;
+      button.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+      if (isLoading) {
+        button.dataset.originalText = button.textContent;
+        button.textContent = '⏳ Cooking...';
+      } else if (button.dataset.originalText) {
+        button.textContent = button.dataset.originalText;
+      }
+    }
+
+    function renderRecipe(resp) {
+      const r = resp.recipe;
+      // Ingredients: robust handling for several formats
+      function formatIngredientEntry(entry) {
+        // If it's already an object, format fields directly
+        if (typeof entry === 'object' && entry !== null) {
+          const name = entry.name || entry.item || entry.ingredient || entry.title || '';
+          const quantity = entry.quantity || entry.qty || '';
+          const unit = entry.unit && entry.unit !== 'None' ? entry.unit : '';
+          // If original request was text, show name-only
+          if (lastRequest && lastRequest.type === 'text') {
+            return name || JSON.stringify(entry);
+          }
+          // For image-origin, prefer quantity + unit + name
+          return [quantity, unit, name].filter(Boolean).join(' ');
+        }
+
+        // If it's a string, it may contain a JSON object appended (e.g. "4 medium {'item': 'potato', ...}")
+        if (typeof entry === 'string') {
+          const s = entry.trim();
+          const jsonStart = s.indexOf('{');
+          if (jsonStart !== -1) {
+            const leading = s.slice(0, jsonStart).trim();
+            let jsonPart = s.slice(jsonStart).trim();
+            // Try to convert single quotes to double quotes for JSON.parse (best-effort)
+            try {
+              const standardized = jsonPart.replace(/([\"'])?([a-zA-Z0-9_\-]+)\1?\s*:/g, '"$2":').replace(/'/g, '"');
+              const parsed = JSON.parse(standardized);
+              // Build fields from parsed object
+              const name = parsed.item || parsed.name || parsed.ingredient || '';
+              const quantity = parsed.quantity || leading || '';
+              const unit = parsed.unit && parsed.unit !== 'None' ? parsed.unit : '';
+              if (lastRequest && lastRequest.type === 'text') {
+                return name || s;
+              }
+              return [quantity, unit, name].filter(Boolean).join(' ');
+            } catch (e) {
+              // If parsing fails, fall back to showing the whole string (cleaned)
+              return s.replace(/\s+\{[\s\S]*$/, '').trim() || s;
+            }
+          }
+          // Simple string (like when backend returns plain names)
+          return s;
+        }
+
+        // Fallback: stringify
+        return JSON.stringify(entry);
+      }
+
+      const ing = r.ingredients.map(i => `<li>${formatIngredientEntry(i)}</li>`).join('');
+      const steps = r.steps.map(s => `<li><strong>Step ${s.number}:<ja/strong> ${s.instruction}</li>`).join('');
+      // Nutrition facts block (always show if present)
+      let nutrition = '';
+      if (r.nutrition) {
+        nutrition = `<ul>`;
+        if (r.nutrition.calories != null) nutrition += `<li>Calories: ${r.nutrition.calories}</li>`;
+        if (r.nutrition.protein_g != null) nutrition += `<li>Protein: ${r.nutrition.protein_g} g</li>`;
+        if (r.nutrition.carbs_g != null) nutrition += `<li>Carbs: ${r.nutrition.carbs_g} g</li>`;
+        if (r.nutrition.fat_g != null) nutrition += `<li>Fat: ${r.nutrition.fat_g} g</li>`;
+        if (r.nutrition.fiber_g != null) nutrition += `<li>Fiber: ${r.nutrition.fiber_g} g</li>`;
+        if (r.nutrition.sodium_mg != null) nutrition += `<li>Sodium: ${r.nutrition.sodium_mg} mg</li>`;
+        nutrition += `</ul>`;
+      }
+
+      const refreshButton = lastRequest ? `
+        <button id="btn-refresh" class="refresh-btn" title="Generate another recipe with same inputs">
+          🔄 Try Another Recipe | नई रेसिपी बनाएं
+        </button>
+      ` : '';
+      
+      const recipeTitle = (r.title || r.name || r.recipe_name || r.recipeTitle || r.title_text || 'ChefGPT Recipe');
+      const saveRecipeButton = `
+        <button id="btn-save-recipe" class="save-recipe-btn" title="Save this recipe for later">
+          💾 Save Recipe | रेसिपी सहेजें
+        </button>
+      `;
+      console.log('Recipe rendering with title:', recipeTitle, 'Save button HTML:', saveRecipeButton);
+      
+      // Determine the source label based on how recipe was generated
+      let sourceLabel = 'From Ingredients | सामग्री से';
+      if (lastRequest) {
+        if (lastRequest.type === 'image') {
+          sourceLabel = 'From Image | तस्वीर से';
+        } else if (lastRequest.type === 'prompt') {
+          sourceLabel = 'From Prompt | प्रॉम्प्ट से';
+        }
+      }
+
+      output.innerHTML = `
+        <div class="card result">
+          <div class="result-header">
+            <div>
+              <h2>${recipeTitle} ${r.cuisine ? '(' + r.cuisine + ')' : ''}</h2>
+              <p>${sourceLabel}</p>
+              <p>Servings: ${r.servings}${r.total_time_minutes != null ? ` • Total time: ${r.total_time_minutes} min` : ''}</p>
+            </div>
+            <div class="button-group">
+              ${saveRecipeButton}
+              ${refreshButton}
+            </div>
+          </div>
+          <div class="columns">
+            <div>
+              <h3>🥘 Ingredients</h3>
+              <ul>${ing}</ul>
+            </div>
+            <div>
+              <h3>👨‍🍳 Steps</h3>
+              <ol>${steps}</ol>
+            </div>
+          </div>
+          ${nutrition ? `<h3>📊 Nutrition</h3>${nutrition}` : ''}
+          ${r.tips && r.tips.length ? `<h3>💡 Tips</h3><ul>${r.tips.map(t => `<li>${t}</li>`).join('')}</ul>` : ''}
+        </div>
+      `;
+
+      // Add event listener for refresh button
+      if (lastRequest) {
+        const refreshBtn = document.getElementById('btn-refresh');
+        if (refreshBtn) {
+          refreshBtn.addEventListener('click', regenerateRecipe);
+        }
+      }
+      
+      // Add event listener for save recipe button
+      const saveBtn = document.getElementById('btn-save-recipe');
+      if (saveBtn) {
+        console.log('Save button found and attaching listener');
+        saveBtn.addEventListener('click', () => {
+          console.log('Save button clicked');
+          saveRecipe(r, recipeTitle);
+        });
+      } else {
+        console.warn('Save button not found in DOM');
+      }
+    }
+    
+    async function saveRecipe(recipeData, recipeTitle) {
+      const title = prompt('Enter a name for this recipe:', recipeTitle);
+      if (!title) return; // User cancelled
+      
+      try {
+        const response = await fetch('/recipes/save', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipe_title: title,
+            recipe_data: recipeData
+          })
+        });
+        
+        if (!response.ok) {
+          const error = await response.json();
+          showMessage(`Failed to save recipe: ${error.detail || 'Unknown error'}`, 'error');
+          return;
+        }
+
+        // Show success with an Open link so user can immediately view saved recipes
+        showMessage('✅ Recipe saved successfully! <a href="/saved-recipes" id="openSavedLink" target="_blank" rel="noopener">Open My Recipes</a>', 'success');
+        // Make the link open the saved recipes in a new tab when clicked (safety: noopener)
+        const openLink = document.getElementById('openSavedLink');
+        if (openLink) {
+          openLink.addEventListener('click', (e) => { /* normal link behavior */ });
+        }
+      } catch (err) {
+        showMessage(`Error saving recipe: ${err.message}`, 'error');
+      }
+    }
+    
+    async function regenerateRecipe() {
+      if (!lastRequest) return;
+      
+      clearMessage();
+      showLoading();
+      
+      try {
+        if (lastRequest.type === 'prompt') {
+          const requestData = { ...lastRequest.data, variation: true };
+          const res = await fetch('/recipe/from_prompt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestData)
+          });
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            throw new Error(errText || `HTTP ${res.status}`);
+          }
+          const data = await res.json();
+          renderRecipe(data);
+        } else if (lastRequest.type === 'text') {
+          // Add variation flag for regeneration
+          const requestData = { ...lastRequest.data, variation: true };
+          const res = await fetch('/recipe/from_text', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestData)
+          });
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            throw new Error(errText || `HTTP ${res.status}`);
+          }
+          const data = await res.json();
+          renderRecipe(data);
+        } else if (lastRequest.type === 'image') {
+          // Add variation flag for regeneration
+          const requestData = { ...lastRequest.data, variation: true };
+          const form = new FormData();
+          form.append('image', lastRequest.file);
+          form.append('preferences_json', JSON.stringify(requestData));
+          
+          const res = await fetch('/recipe/from_image', {
+            method: 'POST',
+            body: form
+          });
+          if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            throw new Error(errText || `HTTP ${res.status}`);
+          }
+          const data = await res.json();
+          renderRecipe(data);
+        }
+      } catch (err) {
+        showMessage(`Error: ${err.message || err}. Is the server running and API key set?`, 'error');
+      }
+    }
+
+    document.getElementById('prompt-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMessage();
+      const btn = document.getElementById('btn-prompt');
+      setLoading(btn, true);
+      showLoading();
+
+      const prompt = document.getElementById('recipe-prompt').value.trim();
+      const servings = parseInt(document.getElementById('prompt-servings').value || '2', 10);
+      const language = document.getElementById('prompt-language').value || 'english';
+
+      const body = { prompt, servings, language };
+      
+      lastRequest = { type: 'prompt', data: body };
+      window.lastRequest = lastRequest;
+      
+      try {
+        const res = await fetch('/recipe/from_prompt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(errText || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        renderRecipe(data);
+      } catch (err) {
+        showMessage(`Error: ${err.message || err}. Is the server running and API key set?`, 'error');
+      } finally {
+        setLoading(btn, false);
+      }
+    });
+
+    document.getElementById('text-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMessage();
+      const btn = document.getElementById('btn-text');
+      setLoading(btn, true);
+      showLoading();
+
+      const ingredients = document.getElementById('ingredients').value
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const servings = parseInt(document.getElementById('servings').value || '2', 10);
+      const cuisine = document.getElementById('cuisine').value || null;
+      const language = document.getElementById('language').value || 'english';
+
+      const body = { ingredients, servings, cuisine_hint: cuisine, language };
+      
+      // Store request data for regeneration
+      lastRequest = { type: 'text', data: body };
+      window.lastRequest = lastRequest;
+      
+      try {
+        const res = await fetch('/recipe/from_text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(errText || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        renderRecipe(data);
+      } catch (err) {
+        showMessage(`Error: ${err.message || err}. Is the server running and API key set?`, 'error');
+      } finally {
+        setLoading(btn, false);
+      }
+    });
+
+    document.getElementById('image-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMessage();
+      const btn = document.getElementById('btn-image');
+      setLoading(btn, true);
+      showLoading();
+
+      const file = document.getElementById('image').files[0];
+      if (!file) { showMessage('Please choose an image.', 'warn'); setLoading(btn, false); return; }
+      
+      const servings = parseInt(document.getElementById('img-servings').value || '2', 10);
+      const cuisine = document.getElementById('img-cuisine').value || null;
+      const language = document.getElementById('img-language').value || 'english';
+      const preferences = { servings, cuisine_hint: cuisine, language };
+
+      // Store request data for regeneration
+      lastRequest = { type: 'image', data: preferences, file: file };
+      window.lastRequest = lastRequest;
+
+      const form = new FormData();
+      form.append('image', file);
+      form.append('preferences_json', JSON.stringify(preferences));
+
+      try {
+        const res = await fetch('/recipe/from_image', {
+          method: 'POST',
+          body: form
+        });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(errText || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        renderRecipe(data);
+      } catch (err) {
+        showMessage(`Error: ${err.message || err}. Is the server running and API key set?`, 'error');
+      } finally {
+        setLoading(btn, false);
+      }
+    });
+  </script>
+</body>
+</html>
+
+
